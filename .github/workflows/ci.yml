@@ -41,7 +41,10 @@ jobs:
 
       - name: Check Python Syntax
         run: |
-          python3 -m py_compile scripts/jupyter_notebook_config.py tests/smoke_test_kernels.py
+          python3 -m py_compile scripts/jupyter_notebook_config.py tests/*.py
+
+      - name: Run Jupyter Credential Regression Tests
+        run: python3 tests/test_jupyter_credentials.py
 
       - name: Run Node Setup Regression Test
         run: |

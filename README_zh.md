@@ -69,10 +69,7 @@ docker build --build-arg BASE_IMAGE=opensandbox/code-interpreter-base:my-dev-bui
 docker run -d --name code-interpreter opensandbox/code-interpreter:latest
 ```
 
-> **关于端口暴露的说明**：Jupyter Notebook 默认仅监听容器回环地址（`127.0.0.1:44771`），专供 OpenSandbox 和 `execd` 内部调用。宿主机 `-p` 端口映射无法直接访问该内部回环服务。请通过 OpenSandbox SDK 或 execd 运行时访问内核；如需进行容器本地诊断，请使用 `docker exec`：
-> ```bash
-> docker exec code-interpreter curl -sf "http://127.0.0.1:44771/api/status?token=opensandboxcodeinterpreterjupyter"
-> ```
+> **关于端口暴露的说明**：Jupyter Notebook 默认仅监听容器回环地址（`127.0.0.1:44771`），专供 OpenSandbox 和 `execd` 内部调用。宿主机 `-p` 端口映射无法直接访问该内部回环服务。请通过 OpenSandbox SDK 或 execd 运行时访问内核。独立启动的容器会生成随机令牌，服务信息和日志保存在仅属主可访问的 `/tmp/opensandbox-jupyter.*` 目录。
 
 **指定运行时语言版本：**
 
@@ -173,7 +170,11 @@ source /opt/code-interpreter/code-interpreter-env.sh go
 
 - `JUPYTER_HOST`：Jupyter 服务监听地址（默认：`http://127.0.0.1:44771`）
 - `JUPYTER_PORT`：Jupyter 服务端口（默认：`44771`）
-- `JUPYTER_TOKEN`：访问令牌（默认：`opensandboxcodeinterpreterjupyter`）
+- `JUPYTER_TOKEN`：与 `execd` 共享的可选访问令牌。未设置或为空时，独立启动的 Jupyter 会生成随机令牌。配置从环境变量读取令牌，并在启动内核前将其移除；令牌不再出现在启动参数中。服务信息和日志保存在仅属主可访问的 `/tmp/opensandbox-jupyter.*` 目录。
+
+此镜像应搭配支持从 `/tmp/opensandbox-jupyter.*/jpserver-*.json` 自动发现独立启动令牌的 `execd` 使用。如果只升级镜像、仍使用不支持自动发现令牌的旧版 `execd`，请在创建沙箱时显式传入随机生成的 `JUPYTER_TOKEN`，否则无法完成鉴权。显式配置的令牌继续生效；派生镜像需要重新构建以去掉继承的固定令牌，若直接调用 `jupyter notebook` 请显式传入 `--config=/opt/code-interpreter/jupyter_notebook_config.py`。
+
+这些措施用于防止其他 Unix 用户直接访问内部 Jupyter 服务。与服务使用相同身份的进程（包括 root 内核）仍处于同一信任边界内；互不信任的租户应使用独立沙箱。
 
 ## 独立构建流程与配置
 
@@ -238,7 +239,7 @@ source /opt/code-interpreter/code-interpreter-env.sh go
    ```bash
    ./tests/smoke_test.sh opensandbox/code-interpreter:latest
    ```
-   冒烟测试会启动隔离测试容器，检验 `http://127.0.0.1:44771/api/status` 服务可用性，校验注册的各语言内核，并通过 WebSocket 通道实际执行 Python（验证同内核状态复用）、Java、jslab、tslab、gonb 与 Bash 代码并断言执行结果。
+   冒烟测试覆盖独立启动时的随机令牌和显式配置的令牌，验证普通 Unix 用户无法读取令牌及日志、无令牌或旧默认令牌的请求被拒绝、内核不继承 `JUPYTER_TOKEN`。测试还会校验 HTTP 服务和已注册的语言内核，并通过 WebSocket 实际执行 Python（含同内核状态复用）、Java、jslab、tslab、gonb 与 Bash 代码。
 
 ## 持续集成（CI）
 

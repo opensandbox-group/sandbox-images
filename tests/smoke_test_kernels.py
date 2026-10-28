@@ -26,6 +26,10 @@ Verifies:
 """
 
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import time
 import urllib.request
 import uuid
@@ -33,7 +37,76 @@ import websocket
 
 BASE_URL = "http://127.0.0.1:44771"
 WS_URL = "ws://127.0.0.1:44771"
-TOKEN = "opensandboxcodeinterpreterjupyter"
+TOKEN = None
+
+
+def load_server_credentials(timeout=30):
+    """Read credentials as the container owner, without printing the token."""
+    global TOKEN
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for path in Path("/tmp").glob("opensandbox-jupyter.*/jpserver-*.json"):
+            try:
+                server = json.loads(path.read_text())
+            except (OSError, ValueError):
+                continue
+            pid = server.get("pid")
+            if (
+                server.get("port") == 44771
+                and server.get("token")
+                and isinstance(pid, int)
+                and pid > 0
+                and Path(f"/proc/{pid}").exists()
+            ):
+                TOKEN = server["token"]
+                configured = os.environ.get("JUPYTER_TOKEN")
+                if configured:
+                    assert TOKEN == configured, "Explicit JUPYTER_TOKEN was not preserved"
+                else:
+                    assert len(TOKEN) == 64 and all(c in "0123456789abcdef" for c in TOKEN)
+                return path, pid
+        time.sleep(1)
+    raise TimeoutError("Jupyter did not create its private server information file")
+
+
+def verify_credential_isolation(server_file, server_pid):
+    print("==> Checking Jupyter credential isolation...")
+    runtime_dir = server_file.parent
+    assert runtime_dir.stat().st_mode & 0o777 == 0o700
+    assert TOKEN.encode() not in Path(f"/proc/{server_pid}/cmdline").read_bytes()
+
+    def drop_privileges():
+        os.setgroups([])
+        os.setgid(65534)
+        os.setuid(65534)
+
+    probe = '''
+import pathlib, sys, urllib.error, urllib.request
+for name in sys.argv[1:]:
+    try:
+        pathlib.Path(name).read_bytes()
+    except PermissionError:
+        pass
+    else:
+        raise AssertionError("Unprivileged user could read " + name)
+for token in ("", "opensandboxcodeinterpreterjupyter", "codeinterpreterlocal"):
+    headers = {"Authorization": "token " + token} if token else {}
+    request = urllib.request.Request("http://127.0.0.1:44771/api/kernels", headers=headers)
+    try:
+        urllib.request.urlopen(request, timeout=5)
+    except urllib.error.HTTPError as error:
+        assert error.code == 403, error.code
+    else:
+        raise AssertionError("Missing or legacy token was accepted")
+'''
+    subprocess.run(
+        [sys.executable, "-c", probe, str(server_file), str(runtime_dir / "jupyter.log"),
+         f"/proc/{server_pid}/environ"],
+        check=True,
+        preexec_fn=drop_privileges,
+        env={k: v for k, v in os.environ.items() if k != "JUPYTER_TOKEN"},
+    )
+    print("Unprivileged credential access and legacy authentication denied: PASS")
 
 
 def wait_for_health(timeout=30):
@@ -185,13 +258,17 @@ class KernelSession:
 
 
 def main():
+    server_file, server_pid = load_server_credentials()
     wait_for_health(timeout=30)
+    verify_credential_isolation(server_file, server_pid)
     specs = verify_kernelspecs()
 
     # 1. Python: test execution and same-kernel state reuse
     py_kernel = "python" if "python" in specs else "python3"
     print(f"==> Testing {py_kernel} kernel and state reuse...")
     with KernelSession(py_kernel) as session:
+        credential_env = session.execute('import os\nprint("JUPYTER_TOKEN" in os.environ)')
+        assert credential_env == "False", "Kernel inherited the Jupyter service credential"
         out1 = session.execute('x = 40 + 2\nprint(f"PY_INIT_{x}")')
         print(f"Python step 1 output: {out1}")
         if "PY_INIT_42" not in out1:

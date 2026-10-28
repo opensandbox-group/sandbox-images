@@ -69,10 +69,7 @@ docker build --build-arg BASE_IMAGE=opensandbox/code-interpreter-base:my-dev-bui
 docker run -d --name code-interpreter opensandbox/code-interpreter:latest
 ```
 
-> **Note on Port Exposure**: By default, Jupyter Notebook listens on container loopback (`127.0.0.1:44771`) as an internal service for OpenSandbox and `execd`. Host `-p` port mapping does not expose loopback services to the host. Access kernels through OpenSandbox/execd, or perform container-local diagnostics via `docker exec`:
-> ```bash
-> docker exec code-interpreter curl -sf "http://127.0.0.1:44771/api/status?token=opensandboxcodeinterpreterjupyter"
-> ```
+> **Note on Port Exposure**: By default, Jupyter Notebook listens on container loopback (`127.0.0.1:44771`) as an internal service for OpenSandbox and `execd`. Host `-p` port mapping does not expose loopback services to the host. Access kernels through OpenSandbox/execd. A standalone container generates a fresh token on startup; server information and logs are stored in an owner-only `/tmp/opensandbox-jupyter.*` directory.
 
 **With Custom Language Version Selection:**
 
@@ -173,7 +170,11 @@ The entrypoint automatically starts Jupyter:
 
 - `JUPYTER_HOST`: Jupyter server host (default: `http://127.0.0.1:44771`)
 - `JUPYTER_PORT`: Jupyter server port (default: `44771`)
-- `JUPYTER_TOKEN`: Access token (default: `opensandboxcodeinterpreterjupyter`)
+- `JUPYTER_TOKEN`: Optional access token shared with `execd`. When absent or empty, standalone Jupyter generates a fresh random token. The token is loaded from the environment, removed before kernels are started, and never passed on the command line.
+
+Use this image with an `execd` release that discovers the standalone token from `/tmp/opensandbox-jupyter.*/jpserver-*.json`. When upgrading the image while keeping an older `execd` that does not discover runtime tokens, explicitly supply a randomly generated `JUPYTER_TOKEN` at sandbox creation; otherwise they cannot authenticate to each other. Existing explicitly configured tokens continue to work. Rebuild derived images to remove any inherited fixed token, and pass `--config=/opt/code-interpreter/jupyter_notebook_config.py` if invoking `jupyter notebook` directly.
+
+These credentials protect the internal Jupyter service from other Unix users. Processes running as the service owner, including root kernels, are still inside the same trust boundary; use separate sandboxes for mutually untrusted tenants.
 
 ## Build Workflow & Configuration
 
@@ -238,7 +239,7 @@ When publishing releases (`PUSH=true`), images are tagged and pushed to:
    ```bash
    ./tests/smoke_test.sh opensandbox/code-interpreter:latest
    ```
-   The smoke test launches a test container, checks HTTP availability at `http://127.0.0.1:44771/api/status`, verifies installed kernelspecs, and executes real code over WebSocket channels for Python (asserting same-kernel state persistence), Java, jslab, tslab, gonb, and Bash.
+   The smoke test covers standalone random credentials and an explicitly configured token. It checks that another Unix user cannot read the token or log, that missing and former default tokens are rejected, and that kernels do not inherit `JUPYTER_TOKEN`. It also checks HTTP availability, installed kernelspecs, and real WebSocket execution for Python (including state persistence), Java, jslab, tslab, gonb, and Bash.
 
 ## Continuous Integration (CI)
 

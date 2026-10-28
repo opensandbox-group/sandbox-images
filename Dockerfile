@@ -78,14 +78,13 @@ RUN set -euo pipefail \
 
 ENV JUPYTER_HOST=http://127.0.0.1:44771 \
     JUPYTER_PORT=44771 \
-    JUPYTER_TOKEN=opensandboxcodeinterpreterjupyter \
     PYTHON_VERSION=3.14 \
     NODE_VERSION=22 \
     GO_VERSION=1.25 \
     JAVA_VERSION=21
 
 COPY scripts/code-interpreter.sh /opt/code-interpreter/code-interpreter.sh
-COPY scripts/jupyter_notebook_config.py /root/.jupyter/
+COPY scripts/jupyter_notebook_config.py /opt/code-interpreter/
 RUN chmod +x /opt/code-interpreter/code-interpreter.sh
 
 WORKDIR /workspace

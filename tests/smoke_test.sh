@@ -16,9 +16,6 @@ set -euo pipefail
 IMAGE="${1:-opensandbox/code-interpreter:latest}"
 CONTAINER_NAME="code-interpreter-smoke-${$}-${RANDOM}"
 
-echo "==> Starting container ${CONTAINER_NAME} using image ${IMAGE}..."
-docker run -d --name "${CONTAINER_NAME}" "${IMAGE}" >/dev/null
-
 cleanup() {
   echo "==> Cleaning up smoke test container ${CONTAINER_NAME}..."
   docker logs "${CONTAINER_NAME}" >/tmp/smoke-test-container.log 2>&1 || true
@@ -26,12 +23,22 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "==> Copying kernel smoke test into container..."
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-docker cp "${REPO_ROOT}/tests/smoke_test_kernels.py" "${CONTAINER_NAME}:/tmp/smoke_test_kernels.py"
-
-echo "==> Executing smoke test inside container..."
-docker exec "${CONTAINER_NAME}" bash -c \
-  'source /opt/code-interpreter/code-interpreter-env.sh python "${PYTHON_VERSION}" && python3 /tmp/smoke_test_kernels.py'
+for mode in standalone configured; do
+  echo "==> Starting ${mode} container ${CONTAINER_NAME} using image ${IMAGE}..."
+  if [ "${mode}" = configured ]; then
+    JUPYTER_TOKEN=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+    export JUPYTER_TOKEN
+    docker run -d --name "${CONTAINER_NAME}" -e JUPYTER_TOKEN "${IMAGE}" >/dev/null
+    unset JUPYTER_TOKEN
+  else
+    docker run -d --name "${CONTAINER_NAME}" "${IMAGE}" >/dev/null
+  fi
+  docker cp "${REPO_ROOT}/tests/smoke_test_kernels.py" "${CONTAINER_NAME}:/tmp/smoke_test_kernels.py"
+  docker exec "${CONTAINER_NAME}" bash -c \
+    'source /opt/code-interpreter/code-interpreter-env.sh python "${PYTHON_VERSION}" && python3 /tmp/smoke_test_kernels.py'
+  cleanup
+done
+trap - EXIT
 
 echo "==> Reusable image smoke test completed successfully!"
